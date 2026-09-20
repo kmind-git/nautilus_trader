@@ -1,0 +1,66 @@
+[package]
+name = "orderhub-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "OrderHub gateway: admission bridge into the Nautilus execution path and local business journal"
+categories.workspace = true
+keywords.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "orderhub_gateway"
+crate-type = ["rlib"]
+
+[features]
+default = []
+
+[dependencies]
+nautilus-common = { workspace = true }
+nautilus-core = { workspace = true }
+nautilus-execution = { workspace = true }
+nautilus-model = { workspace = true }
+nautilus-sandbox = { workspace = true }
+
+log = { workspace = true }
+redb = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# gRPC layer (M1). tonic is a direct dep at 0.14 matching orderhub-proto; the
+# workspace tonic 0.13 entry enables TLS features whose C build fails here.
+orderhub-proto = { path = "../orderhub-proto" }
+tonic = { version = "0.14.6", default-features = false, features = [
+  "channel",
+  "codegen",
+  "router",
+  "server",
+  "transport",
+] }
+tokio = { version = "1.53.1", default-features = false, features = [
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
+tokio-stream = { version = "0.1", features = ["net"] }
+
+[dev-dependencies]
+ahash = { workspace = true }
+nautilus-core = { workspace = true }
+nautilus-model = { workspace = true, features = ["test-support"] }
+nautilus-portfolio = { workspace = true }
+nautilus-risk = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+
+tempfile = { workspace = true }

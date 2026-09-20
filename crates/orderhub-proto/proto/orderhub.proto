@@ -1,0 +1,108 @@
+// OrderHub API contract (M1).
+//
+// Conventions from the design contracts:
+// - 64-bit sequence numbers and nanosecond timestamps travel as strings to
+//   avoid JavaScript numeric precision loss.
+// - Amounts and quantities are decimal strings; float/double are forbidden.
+// - Four business RPCs only; snapshots resume via WatchEvents(after = cursor).
+
+syntax = "proto3";
+
+package orderhub.v1;
+
+service OrderHub {
+  rpc SubmitOrder(SubmitOrderRequest) returns (AdmissionResponse);
+  rpc CancelOrder(CancelOrderRequest) returns (AdmissionResponse);
+  rpc GetState(GetStateRequest) returns (GetStateResponse);
+  rpc WatchEvents(WatchEventsRequest) returns (stream JournalEvent);
+}
+
+message SubmitOrderRequest {
+  string submitter_id = 1;
+  string request_id = 2;
+  string strategy_id = 3;
+  string instrument_id = 4;
+  string side = 5;          // BUY | SELL
+  string quantity = 6;      // decimal string
+  string price = 7;         // decimal string
+  string time_in_force = 8; // GTC | IOC | FOK
+  bool post_only = 9;
+  bool reduce_only = 10;
+  optional uint64 submit_before_ns = 11;
+}
+
+message CancelOrderRequest {
+  string submitter_id = 1;
+  string request_id = 2;
+  string client_order_id = 3;
+}
+
+message AdmissionResponse {
+  string journal_epoch = 1;
+  string seq = 2;
+  string client_order_id = 3;
+  bool already_admitted = 4;
+  string result = 5; // ADMITTED | CANCEL_INTENT_ACCEPTED | ...
+  string reason = 6;
+}
+
+message GetStateRequest {}
+
+message OrderView {
+  string client_order_id = 1;
+  string strategy_id = 2;
+  string instrument_id = 3;
+  string side = 4;
+  string quantity = 5;
+  string price = 6;
+  string status = 7;
+  string filled_quantity = 8;
+}
+
+message InstrumentInfo {
+  string instrument_id = 1;
+  string price_increment = 2;
+  string size_increment = 3;
+  uint32 price_precision = 4;
+}
+
+message GetStateResponse {
+  string journal_epoch = 1;
+  string state_cursor = 2;
+  bool writable = 3;
+  repeated OrderView active_orders = 4;
+  repeated InstrumentInfo instruments = 5;
+}
+
+message WatchEventsRequest {
+  string after = 1; // resume cursor: journal seq already applied
+}
+
+message JournalEvent {
+  string seq = 1;
+  string journal_epoch = 2;
+  oneof kind {
+    AdmissionEvent admission = 3;
+    OutcomeEvent outcome = 4;
+    ProgressEvent progress = 5;
+  }
+}
+
+message AdmissionEvent {
+  string submitter_id = 1;
+  string request_id = 2;
+  string strategy_id = 3;
+  string instrument_id = 4;
+  string request_kind = 5; // SubmitOrder | CancelOrder
+}
+
+message OutcomeEvent {
+  string origin_seq = 1;
+  string client_order_id = 2;
+  string outcome = 3; // ADMITTED | DENIED | DISPATCH_STARTED | CANCEL_INTENT
+  string reason = 4;
+}
+
+message ProgressEvent {
+  string state_cursor = 1;
+}

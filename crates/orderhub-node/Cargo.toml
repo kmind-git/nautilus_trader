@@ -1,0 +1,52 @@
+[package]
+name = "orderhub-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "OrderHub node: assembles the kernel, bridge, journal, and gRPC server"
+categories.workspace = true
+keywords.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "orderhub-node"
+path = "src/main.rs"
+
+[[bin]]
+name = "orderhub-client"
+path = "src/bin/client.rs"
+
+[dependencies]
+nautilus-common = { workspace = true }
+nautilus-core = { workspace = true }
+nautilus-model = { workspace = true }
+nautilus-portfolio = { workspace = true }
+nautilus-risk = { workspace = true }
+
+ustr = { workspace = true }
+
+orderhub-gateway = { path = "../orderhub-gateway" }
+rust_decimal = { workspace = true }
+orderhub-proto = { path = "../orderhub-proto" }
+
+tokio = { version = "1.53.1", default-features = false, features = [
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
+tonic = { version = "0.14.6", default-features = false, features = [
+  "channel",
+  "codegen",
+  "router",
+  "server",
+  "transport",
+] }

@@ -1,0 +1,41 @@
+[package]
+name = "orderhub-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "OrderHub gRPC contract: proto definitions and generated types"
+categories.workspace = true
+keywords.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "orderhub_proto"
+crate-type = ["rlib"]
+
+[features]
+default = []
+
+[dependencies]
+# Direct (non-workspace) tonic: the workspace entry enables `tls-aws-lc`,
+# whose C build is broken on this host. TLS is deferred by design (M1 runs
+# plaintext gRPC inside a trusted network), so plaintext-only here.
+tonic = { version = "0.14.6", default-features = false, features = [
+  "channel",
+  "codegen",
+  "router",
+  "server",
+  "transport",
+] }
+tonic-prost = { version = "0.14", default-features = false }
+prost = { version = "0.14", default-features = false }
+
+[build-dependencies]
+protox = { version = "0.9.1" }
+tonic-prost-build = { version = "0.14" }
