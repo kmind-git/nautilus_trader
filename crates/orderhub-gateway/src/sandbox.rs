@@ -105,10 +105,19 @@ pub fn attach_sandbox_execution(
             client.connect().await.expect("sandbox client connect");
             let _ = client.start();
         });
-    engine
-        .borrow_mut()
+    let mut engine_ref = engine.borrow_mut();
+    engine_ref
         .register_client(Box::new(client))
         .expect("register sandbox client");
+    // Upstream separates registration from routing: bind the sandbox client
+    // to its venue explicitly and make it the default route.
+    engine_ref
+        .register_venue_routing(ClientId::from(SANDBOX_CLIENT_ID), venue)
+        .expect("register sandbox venue routing");
+    engine_ref
+        .set_default_client(ClientId::from(SANDBOX_CLIENT_ID))
+        .expect("set sandbox default client");
+    drop(engine_ref);
 
     // Bus handlers hold weak references; keep the engine for the process
     // lifetime (a full node owns its engines instead).
