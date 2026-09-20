@@ -66,6 +66,13 @@ pub enum BridgeError {
     Order(String),
     /// The order could not be registered in the cache.
     Cache(String),
+    /// The readiness gate is not admitting new orders.
+    NotReady {
+        /// Current readiness state name.
+        state: String,
+        /// Halt or restoring reason.
+        reason: String,
+    },
 }
 
 impl std::error::Error for BridgeError {}
@@ -84,6 +91,9 @@ impl std::fmt::Display for BridgeError {
             Self::Journal(err) => write!(f, "journal error: {err}"),
             Self::Order(err) => write!(f, "order construction error: {err}"),
             Self::Cache(err) => write!(f, "cache registration error: {err}"),
+            Self::NotReady { state, reason } => {
+                write!(f, "order hub not ready ({state}): {reason}")
+            }
         }
     }
 }
@@ -141,6 +151,7 @@ pub struct OrderHubBridge {
     journal: Arc<BusinessJournal>,
     worker: Option<crate::worker::PersistenceWorker>,
     quota: Option<Rc<RefCell<crate::quota::QuotaLedger>>>,
+    gate: Option<std::sync::Arc<crate::readiness::ReadinessGate>>,
 }
 
 impl OrderHubBridge {
@@ -162,6 +173,7 @@ impl OrderHubBridge {
             journal,
             worker: None,
             quota: None,
+            gate: None,
         }
     }
 
@@ -169,6 +181,13 @@ impl OrderHubBridge {
     #[must_use]
     pub fn with_worker(mut self, worker: crate::worker::PersistenceWorker) -> Self {
         self.worker = Some(worker);
+        self
+    }
+
+    /// Installs the readiness gate; submissions are refused unless READY.
+    #[must_use]
+    pub fn with_gate(mut self, gate: std::sync::Arc<crate::readiness::ReadinessGate>) -> Self {
+        self.gate = Some(gate);
         self
     }
 
@@ -193,6 +212,16 @@ impl OrderHubBridge {
         &self,
         req: &LimitOrderRequest,
     ) -> Result<AdmissionReceipt, BridgeError> {
+        if let Some(gate) = &self.gate
+            && !gate.is_admissible()
+        {
+            let state = gate.get();
+            return Err(BridgeError::NotReady {
+                state: state.as_str().to_string(),
+                reason: gate.halt_reason(),
+            });
+        }
+
         let fingerprint = fingerprint(req);
         let ts_init_ns = self.clock.borrow().timestamp_ns().as_u64();
 
@@ -204,13 +233,31 @@ impl OrderHubBridge {
             return self.receipt_for_existing(record, req, fingerprint);
         }
 
-        // 1b. Quota: check + tentative hold (serialized on this thread)
+        // 1b. Quota: check + tentative hold (serialized on this thread).
+        // Buys reserve notional against strategy and account budgets; sells
+        // reserve sellable quantity against strategy holdings.
         let tentative = self.quota.as_ref().map(|ledger| {
-            let notional = notional_of(&req.quantity, &req.price)?;
-            ledger
-                .borrow_mut()
-                .try_tentative(req.strategy_id.as_ref(), notional)
-                .map_err(|err| BridgeError::Order(err.to_string()))
+            let mut ledger = ledger.borrow_mut();
+            match req.side {
+                nautilus_model::enums::OrderSide::Buy => {
+                    let notional = notional_of(&req.quantity, &req.price)?;
+                    ledger
+                        .try_tentative_buy(req.strategy_id.as_ref(), notional)
+                        .map_err(|err| BridgeError::Order(err.to_string()))
+                }
+                nautilus_model::enums::OrderSide::Sell => {
+                    use rust_decimal::prelude::FromStr;
+                    let quantity = rust_decimal::Decimal::from_str(&req.quantity.to_string())
+                        .map_err(|err| BridgeError::Order(err.to_string()))?;
+                    ledger
+                        .try_tentative_sell(
+                            req.strategy_id.as_ref(),
+                            &req.instrument_id.to_string(),
+                            quantity,
+                        )
+                        .map_err(|err| BridgeError::Order(err.to_string()))
+                }
+            }
         });
         if let Some(Err(err)) = &tentative {
             return Err(BridgeError::Order(err.to_string()));

@@ -72,6 +72,7 @@ message GetStateResponse {
   bool writable = 3;
   repeated OrderView active_orders = 4;
   repeated InstrumentInfo instruments = 5;
+  string readiness = 6;
 }
 
 message WatchEventsRequest {

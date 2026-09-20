@@ -76,7 +76,8 @@ enum CoreRequest {
 pub struct CoreHandle {
     tx: CoreSender<CoreRequest>,
     journal: Arc<BusinessJournal>,
-    token: Arc<str>,
+    registry: Arc<crate::auth::SubmitterRegistry>,
+    gate: std::sync::Arc<crate::readiness::ReadinessGate>,
 }
 
 impl CoreHandle {
@@ -94,7 +95,8 @@ impl CoreHandle {
         ) + Send
         + 'static,
         journal: Arc<BusinessJournal>,
-        token: &str,
+        registry: Arc<crate::auth::SubmitterRegistry>,
+        gate: std::sync::Arc<crate::readiness::ReadinessGate>,
     ) -> Self {
         let (tx, rx) = mpsc::channel::<CoreRequest>();
         std::thread::Builder::new()
@@ -107,8 +109,15 @@ impl CoreHandle {
         Self {
             tx,
             journal,
-            token: Arc::from(token),
+            registry,
+            gate,
         }
+    }
+
+    /// The shared readiness gate.
+    #[must_use]
+    pub fn gate(&self) -> std::sync::Arc<crate::readiness::ReadinessGate> {
+        std::sync::Arc::clone(&self.gate)
     }
 
     async fn submit(
@@ -266,16 +275,43 @@ impl OrderHubService {
         Self { core }
     }
 
-    fn authorize<T>(request: &RpcRequest<T>, expected: &str) -> Result<(), Status> {
-        let provided = request
+    /// Authenticates the bearer token to a submitter identity.
+    fn authenticate<T>(
+        &self,
+        request: &RpcRequest<T>,
+    ) -> Result<&crate::auth::SubmitterCredentials, Status> {
+        let header = request
             .metadata()
             .get("authorization")
-            .and_then(|value| value.to_str().ok());
-        match provided {
-            Some(value) if value == format!("Bearer {expected}") => Ok(()),
-            _ => Err(Status::permission_denied("invalid or missing token")),
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        self.core
+            .registry
+            .authenticate_header(header)
+            .ok_or_else(|| Status::permission_denied("invalid or missing token"))
+    }
+
+    /// Authenticates and verifies the request's strategy is authorized.
+    fn authorize_strategy<T>(
+        &self,
+        request: &RpcRequest<T>,
+        strategy_id: &str,
+    ) -> Result<&crate::auth::SubmitterCredentials, Status> {
+        let credentials = self.authenticate(request)?;
+        if crate::auth::SubmitterRegistry::is_authorized(credentials, strategy_id) {
+            Ok(credentials)
+        } else {
+            // Do not disclose whether the strategy exists for others.
+            Err(Status::permission_denied(
+                "strategy not authorized for this submitter",
+            ))
         }
     }
+}
+
+/// Borrows the strategy id from a submit request before it is consumed.
+fn req_ref_strategy(request: &RpcRequest<SubmitOrderRequest>) -> &str {
+    request.get_ref().strategy_id.as_str()
 }
 
 #[tonic::async_trait]
@@ -284,7 +320,7 @@ impl OrderHub for OrderHubService {
         &self,
         request: Request<SubmitOrderRequest>,
     ) -> Result<Response<AdmissionResponse>, Status> {
-        Self::authorize(&request, &self.core.token)?;
+        let credentials = self.authorize_strategy(&request, req_ref_strategy(&request))?;
         let req = request.into_inner();
 
         let side = match req.side.as_str() {
@@ -303,7 +339,7 @@ impl OrderHub for OrderHubService {
             }
         };
         let limit_request = LimitOrderRequest {
-            submitter_id: req.submitter_id,
+            submitter_id: credentials.submitter_id.clone(),
             request_id: req.request_id,
             strategy_id: StrategyId::from(req.strategy_id),
             instrument_id: InstrumentId::from(req.instrument_id),
@@ -341,13 +377,13 @@ impl OrderHub for OrderHubService {
         &self,
         request: Request<CancelOrderRequest>,
     ) -> Result<Response<AdmissionResponse>, Status> {
-        Self::authorize(&request, &self.core.token)?;
+        let credentials = self.authenticate(&request)?;
         let req = request.into_inner();
 
         let receipt = self
             .core
             .cancel(
-                req.submitter_id,
+                credentials.submitter_id.clone(),
                 req.request_id,
                 req.client_order_id.clone(),
             )
@@ -371,12 +407,14 @@ impl OrderHub for OrderHubService {
         &self,
         request: Request<GetStateRequest>,
     ) -> Result<Response<GetStateResponse>, Status> {
-        Self::authorize(&request, &self.core.token)?;
+        self.authenticate(&request)?;
         let snapshot = self.core.snapshot().await?;
+        let gate = self.core.gate();
         Ok(Response::new(GetStateResponse {
             journal_epoch: snapshot.epoch.to_string(),
             state_cursor: snapshot.cursor.to_string(),
-            writable: true,
+            writable: gate.is_admissible(),
+            readiness: gate.get().as_str().to_string(),
             active_orders: snapshot.orders,
             instruments: snapshot.instruments,
         }))
@@ -388,7 +426,7 @@ impl OrderHub for OrderHubService {
         &self,
         request: Request<WatchEventsRequest>,
     ) -> Result<Response<Self::WatchEventsStream>, Status> {
-        Self::authorize(&request, &self.core.token)?;
+        self.authenticate(&request)?;
         let req = request.into_inner();
         let mut cursor: u64 = req
             .after

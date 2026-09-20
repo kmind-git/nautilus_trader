@@ -34,6 +34,7 @@ ustr = { workspace = true }
 
 orderhub-gateway = { path = "../orderhub-gateway" }
 rust_decimal = { workspace = true }
+serde_json = { workspace = true }
 orderhub-proto = { path = "../orderhub-proto" }
 
 tokio = { version = "1.53.1", default-features = false, features = [

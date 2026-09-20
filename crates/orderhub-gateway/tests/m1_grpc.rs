@@ -162,7 +162,21 @@ fn m1_grpc_closed_loop() {
         let dir = tempfile::tempdir().unwrap();
         let journal = Arc::new(BusinessJournal::open(&dir.path().join("journal.redb")).unwrap());
         let worker = PersistenceWorker::start(Arc::clone(&journal));
-        let core = CoreHandle::spawn(core_setup(Arc::clone(&journal), worker), journal, TOKEN);
+        let registry = Arc::new(orderhub_gateway::auth::SubmitterRegistry::new(vec![
+            orderhub_gateway::auth::SubmitterCredentials {
+                token: TOKEN.to_string(),
+                submitter_id: "trader-1".to_string(),
+                strategies: vec!["ORDERHUB-S001".to_string()],
+            },
+        ]));
+        let gate = orderhub_gateway::readiness::ReadinessGate::new();
+        gate.set(orderhub_gateway::readiness::Readiness::Ready, "");
+        let core = CoreHandle::spawn(
+            core_setup(Arc::clone(&journal), worker),
+            journal,
+            registry,
+            gate,
+        );
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

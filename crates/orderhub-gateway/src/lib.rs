@@ -33,9 +33,11 @@
 //! - The gRPC transport (`orderhub-proto` and the tonic server) is out of M0
 //!   scope entirely.
 
+pub mod auth;
 pub mod bridge;
 pub mod grpc;
 pub mod journal;
 pub mod quota;
+pub mod readiness;
 pub mod sandbox;
 pub mod worker;

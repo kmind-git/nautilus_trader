@@ -210,7 +210,7 @@ fn m1_q1_competing_requests_for_one_budget_admit_exactly_one() {
                 let outcome = ledger
                     .lock()
                     .unwrap()
-                    .try_tentative("ORDERHUB-S001", dec!(60));
+                    .try_tentative_buy("ORDERHUB-S001", dec!(60));
                 results.lock().unwrap().push(outcome.is_ok());
             });
         }
@@ -231,11 +231,13 @@ fn m1_q2_tentative_commit_and_release_lifecycle() {
     let mut ledger = QuotaLedger::new();
     ledger.set_budget("ORDERHUB-S001", dec!(100));
 
-    let t1 = ledger.try_tentative("ORDERHUB-S001", dec!(60)).unwrap();
+    let t1 = ledger.try_tentative_buy("ORDERHUB-S001", dec!(60)).unwrap();
     assert_eq!(ledger.available("ORDERHUB-S001"), dec!(40));
     assert_eq!(
-        ledger.try_tentative("ORDERHUB-S001", dec!(50)).unwrap_err(),
-        orderhub_gateway::quota::QuotaError::InsufficientBudget {
+        ledger
+            .try_tentative_buy("ORDERHUB-S001", dec!(50))
+            .unwrap_err(),
+        orderhub_gateway::quota::QuotaError::StrategyBudget {
             strategy_id: "ORDERHUB-S001".to_string(),
             requested: dec!(50),
             available: dec!(40),
@@ -243,7 +245,7 @@ fn m1_q2_tentative_commit_and_release_lifecycle() {
     );
 
     // Pre-commit failure releases the hold
-    let t2 = ledger.try_tentative("ORDERHUB-S001", dec!(40)).unwrap();
+    let t2 = ledger.try_tentative_buy("ORDERHUB-S001", dec!(40)).unwrap();
     ledger.release_tentative(t2).unwrap();
     assert_eq!(ledger.available("ORDERHUB-S001"), dec!(40));
 

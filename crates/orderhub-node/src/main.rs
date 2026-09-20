@@ -55,23 +55,59 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let journal_path = std::path::PathBuf::from(
         std::env::var("ORDERHUB_JOURNAL").unwrap_or_else(|_| "orderhub-journal.redb".to_string()),
     );
-    let token = std::env::var("ORDERHUB_TOKEN").unwrap_or_else(|_| "orderhub-dev-token".into());
+    // M2: per-submitter credential registry (JSON file of credential list).
+    let registry = match std::env::var("ORDERHUB_SUBMITTERS") {
+        Ok(path) => {
+            let text = std::fs::read_to_string(&path)?;
+            Arc::new(serde_json::from_str::<
+                orderhub_gateway::auth::SubmitterRegistry,
+            >(&text)?)
+        }
+        Err(_) => Arc::new(orderhub_gateway::auth::SubmitterRegistry::new(vec![
+            orderhub_gateway::auth::SubmitterCredentials {
+                token: std::env::var("ORDERHUB_TOKEN")
+                    .unwrap_or_else(|_| "orderhub-dev-token".into()),
+                submitter_id: "trader-1".to_string(),
+                strategies: vec!["ORDERHUB-S001".to_string()],
+            },
+        ])),
+    };
 
-    let journal = Arc::new(BusinessJournal::open(&journal_path)?);
+    // Readiness lifecycle: BOOTING -> RESTORING -> READY (HALTED on failure).
+    let gate = orderhub_gateway::readiness::ReadinessGate::new();
+    let journal = match BusinessJournal::open(&journal_path) {
+        Ok(journal) => {
+            gate.set(orderhub_gateway::readiness::Readiness::Restoring, "");
+            journal
+        }
+        Err(err) => {
+            gate.set(
+                orderhub_gateway::readiness::Readiness::Halted,
+                &format!("journal open failed: {err}"),
+            );
+            return Err(Box::new(err));
+        }
+    };
+    let journal = Arc::new(journal);
     let worker = PersistenceWorker::start(Arc::clone(&journal));
     let recorder_worker = worker.clone();
+    let gate_for_setup = gate.clone();
     let journal_for_setup = Arc::clone(&journal);
+    let last_seq = journal.last_seq()?;
+    let recovered = journal.scan_all()?.len();
     println!(
-        "orderhub-node: journal={} epoch={} last_seq={}",
+        "orderhub-node: journal={} epoch={} last_seq={} recovered_entries={recovered}",
         journal_path.display(),
         journal.epoch(),
-        journal.last_seq()?,
+        last_seq,
     );
+    gate.set(orderhub_gateway::readiness::Readiness::Ready, "");
 
     let core = CoreHandle::spawn(
-        move || core_setup(journal_for_setup, worker, recorder_worker),
+        move || core_setup(journal_for_setup, worker, recorder_worker, gate_for_setup),
         journal,
-        &token,
+        registry,
+        gate,
     );
 
     let runtime = tokio::runtime::Runtime::new()?;
@@ -85,6 +121,7 @@ fn core_setup(
     journal: Arc<BusinessJournal>,
     worker: PersistenceWorker,
     recorder_worker: PersistenceWorker,
+    gate: std::sync::Arc<orderhub_gateway::readiness::ReadinessGate>,
 ) -> (
     OrderHubBridge,
     Rc<RefCell<Cache>>,
@@ -177,6 +214,7 @@ fn core_setup(
         journal,
     )
     .with_worker(worker)
-    .with_quota(quota);
+    .with_quota(quota)
+    .with_gate(gate);
     (bridge, cache, exec_rx)
 }
