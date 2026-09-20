@@ -138,7 +138,10 @@ impl FixInitiator {
             match field(&fields, 35).ok_or_else(|| FixError::Malformed("no MsgType".into()))? {
                 "A" => return Ok(initiator),
                 "5" => {
-                    return Err(FixError::Rejected("logged out during handshake".into()));
+                    return Err(FixError::Rejected(format!(
+                        "logged out during handshake: {}",
+                        field(&fields, 58).unwrap_or("no text")
+                    )));
                 }
                 "3" => {
                     return Err(FixError::Rejected(format!(
@@ -253,22 +256,7 @@ impl FixInitiator {
     }
 
     fn read_frame(&mut self) -> Result<String, FixError> {
-        loop {
-            if let Some(end) = find_frame_end(&self.buffer) {
-                let message: Vec<u8> = self.buffer.drain(..end).collect();
-                return String::from_utf8(message)
-                    .map_err(|_| FixError::Malformed("non-UTF8 frame".into()));
-            }
-            let mut chunk = [0u8; 4096];
-            let read = self.stream.read(&mut chunk)?;
-            if read == 0 {
-                return Err(FixError::Io(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "FIX connection closed",
-                )));
-            }
-            self.buffer.extend_from_slice(&chunk[..read]);
-        }
+        read_frame(&mut self.stream, &mut self.buffer)
     }
 }
 
@@ -379,7 +367,7 @@ fn build_body(
         body.push_str(&format!("{tag}={value}{SOH}"));
     }
     format!(
-        "35={msg_type}{SOH}49={sender}{SOH}56={target}{SOH}34={seq}{SOH}52={}{}",
+        "35={msg_type}{SOH}49={sender}{SOH}56={target}{SOH}34={seq}{SOH}52={}{SOH}{}",
         timestamp_now(),
         body
     )
@@ -419,6 +407,25 @@ fn frame(body: &str) -> String {
     format!("{message}10={:03}{SOH}", checksum(&message))
 }
 
+fn read_frame(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> Result<String, FixError> {
+    loop {
+        if let Some(end) = find_frame_end(buffer) {
+            let message: Vec<u8> = buffer.drain(..end).collect();
+            return String::from_utf8(message)
+                .map_err(|_| FixError::Malformed("non-UTF8 frame".into()));
+        }
+        let mut chunk = [0u8; 4096];
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(FixError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "FIX connection closed",
+            )));
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+}
+
 fn find_frame_end(buffer: &[u8]) -> Option<usize> {
     // The checksum field is the last field: "10=XXX<SOH>".
     let tail_len = "10=000\u{1}".len();
@@ -434,6 +441,14 @@ fn find_frame_end(buffer: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_is_valid_fix_utc() {
+        let ts = timestamp_now();
+        println!("TS={ts}");
+        assert_eq!(ts.len(), 17, "got {ts}");
+        assert!(ts.as_bytes()[8] == b'-', "got {ts}");
+    }
 
     #[test]
     fn frame_roundtrip_parses_fields_and_checksum() {
@@ -499,5 +514,163 @@ mod tests {
             }
             other => panic!("expected fill, got {other:?}"),
         }
+    }
+}
+
+/// Writer half of an initiator: encodes and sends application messages.
+#[derive(Debug)]
+pub struct FixWriter {
+    stream: TcpStream,
+    sender_comp_id: String,
+    target_comp_id: String,
+    outbound_seq: u64,
+}
+
+impl FixWriter {
+    /// Submits a new order (35=D) per the exchange profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message cannot be sent.
+    pub fn submit_order(
+        &mut self,
+        cl_ord_id: &str,
+        symbol: &str,
+        side: Side,
+        quantity: Decimal,
+        price: Option<Decimal>,
+    ) -> Result<(), FixError> {
+        let order_type = if price.is_some() { "2" } else { "1" };
+        let mut fields = vec![
+            (21, "1".to_string()),
+            (11, cl_ord_id.to_string()),
+            (55, symbol.to_string()),
+            (54, side.tag().to_string()),
+            (60, timestamp_now()),
+            (38, quantity.to_string()),
+            (40, order_type.to_string()),
+            (59, "0".to_string()),
+        ];
+        if let Some(px) = price {
+            fields.push((44, px.to_string()));
+        }
+        self.send_app("D", &fields)
+    }
+
+    /// Requests cancellation (35=F).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message cannot be sent.
+    pub fn cancel_order(
+        &mut self,
+        cl_ord_id: &str,
+        orig_cl_ord_id: &str,
+        symbol: &str,
+        side: Side,
+    ) -> Result<(), FixError> {
+        self.send_app(
+            "F",
+            &[
+                (11, cl_ord_id.to_string()),
+                (41, orig_cl_ord_id.to_string()),
+                (55, symbol.to_string()),
+                (54, side.tag().to_string()),
+                (60, timestamp_now()),
+            ],
+        )
+    }
+
+    fn send_app(&mut self, msg_type: &str, fields: &[(u32, String)]) -> Result<(), FixError> {
+        let seq = self.outbound_seq;
+        self.outbound_seq += 1;
+        let body = build_body(
+            msg_type,
+            &self.sender_comp_id,
+            &self.target_comp_id,
+            seq,
+            fields,
+        );
+        self.stream.write_all(frame(&body).as_bytes())?;
+        self.stream.flush()?;
+        Ok(())
+    }
+}
+
+impl FixInitiator {
+    /// Splits a logged-in initiator into a writer and a background reader
+    /// thread delivering decoded events until the connection closes.
+    #[must_use]
+    pub fn split(
+        self,
+    ) -> (
+        FixWriter,
+        std::sync::mpsc::Receiver<ExecEvent>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let Self {
+            stream,
+            sender_comp_id,
+            target_comp_id,
+            outbound_seq,
+            buffer,
+        } = self;
+        let reader_stream = stream
+            .try_clone()
+            .expect("clone FIX socket for reader thread");
+        let (tx, rx) = std::sync::mpsc::channel::<ExecEvent>();
+        let writer = FixWriter {
+            stream,
+            sender_comp_id,
+            target_comp_id,
+            outbound_seq,
+        };
+        let handle = std::thread::Builder::new()
+            .name("orderhub-fix-reader".to_string())
+            .spawn(move || {
+                let mut reader = FixReader {
+                    stream: reader_stream,
+                    buffer,
+                };
+                loop {
+                    match reader.next_event() {
+                        Ok(event) => {
+                            if tx.send(event).is_err() {
+                                return; // consumer gone
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("FIX_READER_DIED={err:?}");
+                            return;
+                        }
+                    }
+                }
+            })
+            .expect("spawn FIX reader thread");
+        (writer, rx, handle)
+    }
+}
+
+/// Blocking frame reader used by the background thread.
+#[derive(Debug)]
+struct FixReader {
+    stream: TcpStream,
+    buffer: Vec<u8>,
+}
+
+impl FixReader {
+    fn next_event(&mut self) -> Result<ExecEvent, FixError> {
+        let message = read_frame(&mut self.stream, &mut self.buffer)?;
+        let fields = parse_fields(&message)?;
+        let msg_type =
+            field(&fields, 35).ok_or_else(|| FixError::Malformed("no MsgType".into()))?;
+        Ok(match msg_type {
+            "8" => decode_execution_report(&fields)?,
+            "3" => ExecEvent::Rejected {
+                cl_ord_id: field(&fields, 11).unwrap_or_default().to_string(),
+                reason: field(&fields, 58).unwrap_or("unspecified").to_string(),
+            },
+            other => ExecEvent::Session(other.to_string()),
+        })
     }
 }

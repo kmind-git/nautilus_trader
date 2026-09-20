@@ -282,8 +282,8 @@ fn m1_a2_cancel_dispatch_reaches_terminal_canceled() {
 
 #[test]
 fn m1_c1_mixed_submit_and_cancel_durable_throughput() {
-    const SUBMITTERS: usize = 16;
-    const PER_SUBMITTER: usize = 62;
+    const SUBMITTERS: usize = 24;
+    const PER_SUBMITTER: usize = 41;
 
     let dir = tempfile::tempdir().unwrap();
     let journal = Arc::new(BusinessJournal::open(&dir.path().join("journal.redb")).unwrap());

@@ -37,6 +37,7 @@ pub mod auth;
 pub mod bridge;
 pub mod grpc;
 pub mod journal;
+pub mod local_client;
 pub mod local_exchange;
 pub mod quota;
 pub mod readiness;

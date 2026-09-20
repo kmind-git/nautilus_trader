@@ -23,6 +23,7 @@ crate-type = ["rlib"]
 default = []
 
 [dependencies]
+anyhow = { workspace = true }
 nautilus-common = { workspace = true }
 nautilus-core = { workspace = true }
 nautilus-execution = { workspace = true }
@@ -55,7 +56,9 @@ tokio = { version = "1.53.1", default-features = false, features = [
 tokio-stream = { version = "0.1", features = ["net"] }
 
 [dev-dependencies]
+ustr = { workspace = true }
 ahash = { workspace = true }
+anyhow = { workspace = true }
 nautilus-core = { workspace = true }
 nautilus-model = { workspace = true, features = ["test-support"] }
 nautilus-portfolio = { workspace = true }
