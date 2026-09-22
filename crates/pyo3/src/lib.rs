@@ -33,13 +33,9 @@
 //! to toggle bindings and optional dependencies:
 //!
 //! - `arrow`: Enables Apache Arrow support in dependent crates.
-//! - `betfair`: Enables the Betfair adapter and its Python bindings.
-//! - `defi`: Enables DeFi (Decentralized Finance) support, including blockchain adapters.
 //! - `extension-module`: Builds as a Python extension module and is automatically enabled by
 //!   `maturin`.
 //! - `high-precision`: Uses 128-bit value types throughout the workspace.
-//! - `hypersync`: Enables [`hypersync-client`](https://crates.io/crates/hypersync-client)
-//!   support for the blockchain adapter.
 //! - `mimalloc`: Sets [mimalloc](https://crates.io/crates/mimalloc) as Rust's global allocator.
 //! - `postgres`: Enables PostgreSQL (sqlx) back-ends in dependent crates.
 //! - `redis`: Enables Redis based infrastructure in dependent crates.
@@ -186,112 +182,6 @@ fn _libnautilus(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let submodule = pyo3::wrap_pymodule!(nautilus_backtest::python::backtest);
     m.add_wrapped(submodule)?;
     sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // Adapters
-    ////////////////////////////////////////////////////////////////////////////////
-
-    let n = "architect_ax";
-    let submodule = pyo3::wrap_pymodule!(nautilus_architect_ax::python::architect_ax);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    #[cfg(feature = "betfair")]
-    {
-        let n = "betfair";
-        let submodule = pyo3::wrap_pymodule!(nautilus_betfair::python::betfair);
-        m.add_wrapped(submodule)?;
-        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-    }
-
-    let n = "binance";
-    let submodule = pyo3::wrap_pymodule!(nautilus_binance::python::binance);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "bitmex";
-    let submodule = pyo3::wrap_pymodule!(nautilus_bitmex::python::bitmex);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "bybit";
-    let submodule = pyo3::wrap_pymodule!(nautilus_bybit::python::bybit);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "coinbase";
-    let submodule = pyo3::wrap_pymodule!(nautilus_coinbase::python::coinbase);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "databento";
-    let submodule = pyo3::wrap_pymodule!(nautilus_databento::python::databento);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "deribit";
-    let submodule = pyo3::wrap_pymodule!(nautilus_deribit::python::deribit);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "derive";
-    let submodule = pyo3::wrap_pymodule!(nautilus_derive::python::derive);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "dydx";
-    let submodule = pyo3::wrap_pymodule!(nautilus_dydx::python::dydx);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "hyperliquid";
-    let submodule = pyo3::wrap_pymodule!(nautilus_hyperliquid::python::hyperliquid);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "kraken";
-    let submodule = pyo3::wrap_pymodule!(nautilus_kraken::python::kraken);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "lighter";
-    let submodule = pyo3::wrap_pymodule!(nautilus_lighter::python::lighter);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "interactive_brokers";
-    let submodule = pyo3::wrap_pymodule!(nautilus_interactive_brokers::python::interactive_brokers);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "okx";
-    let submodule = pyo3::wrap_pymodule!(nautilus_okx::python::okx);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "polymarket";
-    let submodule = pyo3::wrap_pymodule!(nautilus_polymarket::python::polymarket);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "sandbox";
-    let submodule = pyo3::wrap_pymodule!(nautilus_sandbox::python::sandbox);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    let n = "tardis";
-    let submodule = pyo3::wrap_pymodule!(nautilus_tardis::python::tardis);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-
-    #[cfg(feature = "defi")]
-    {
-        // nautilus-import-ok: wrap_pymodule! requires fully qualified paths
-        let n = "blockchain";
-        let submodule = pyo3::wrap_pymodule!(nautilus_blockchain::python::blockchain);
-        m.add_wrapped(submodule)?;
-        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
-    }
 
     // Register a lightweight shutdown hook so the interpreter waits for the Tokio
     // runtime to yield once before `Py_Finalize` tears it down.

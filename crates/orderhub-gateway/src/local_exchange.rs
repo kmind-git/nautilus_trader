@@ -282,6 +282,10 @@ fn decode_execution_report(fields: &[(u32, String)]) -> Result<ExecEvent, FixErr
     let cl_ord_id = field(fields, 11).unwrap_or_default().to_string();
     let order_id = field(fields, 37).unwrap_or_default().to_string();
     let exec_type = field(fields, 150).unwrap_or("0");
+    // Cancel reports carry the fresh cancel request's ClOrdID in tag 11 and
+    // reference the cancelled order through OrigClOrdID (tag 41); map them
+    // back to the original order so the pump finds it in the cache.
+    let cancel_cl_ord_id = field(fields, 41).unwrap_or(&cl_ord_id).to_string();
     Ok(match exec_type {
         "0" => ExecEvent::New {
             cl_ord_id,
@@ -296,7 +300,7 @@ fn decode_execution_report(fields: &[(u32, String)]) -> Result<ExecEvent, FixErr
             cum_qty: parse_dec(field(fields, 14).unwrap_or("0"))?,
         },
         "4" => ExecEvent::Canceled {
-            cl_ord_id,
+            cl_ord_id: cancel_cl_ord_id,
             order_id,
         },
         "8" => ExecEvent::Rejected {
@@ -513,6 +517,25 @@ mod tests {
                 assert_eq!(cum_qty, Decimal::from(10));
             }
             other => panic!("expected fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn execution_report_cancel_maps_orig_cl_ord_id() {
+        // Cancel reports: tag 11 is the fresh cancel request ID, tag 41 the
+        // original order; the event must key on the original.
+        let report =
+            format!("8=FIX.4.2{SOH}9=1{SOH}35=8{SOH}37=V1{SOH}41=O-1{SOH}11=C-7{SOH}150=4{SOH}");
+        let fields = parse_fields(&report).unwrap();
+        match decode_execution_report(&fields).unwrap() {
+            ExecEvent::Canceled {
+                cl_ord_id,
+                order_id,
+            } => {
+                assert_eq!(cl_ord_id, "O-1");
+                assert_eq!(order_id, "V1");
+            }
+            other => panic!("expected cancel, got {other:?}"),
         }
     }
 }

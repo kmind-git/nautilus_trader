@@ -55,6 +55,15 @@ struct CoreSnapshot {
     instruments: Vec<InstrumentInfo>,
 }
 
+/// Wiring the spawned core thread owns: the bridge, the cache, the deferred
+/// execution-event receiver, and the local FIX exchange pump (when attached).
+pub type CoreState = (
+    OrderHubBridge,
+    Rc<RefCell<Cache>>,
+    Option<crate::exec_wiring::ExecEventRx>,
+    Option<crate::local_client::LocalPump>,
+);
+
 enum CoreRequest {
     Submit {
         request: LimitOrderRequest,
@@ -88,12 +97,7 @@ impl CoreHandle {
     /// Panics if the core thread cannot be spawned.
     #[allow(clippy::type_complexity)]
     pub fn spawn(
-        setup: impl FnOnce() -> (
-            OrderHubBridge,
-            Rc<RefCell<Cache>>,
-            Option<crate::sandbox::ExecEventRx>,
-        ) + Send
-        + 'static,
+        setup: impl FnOnce() -> CoreState + Send + 'static,
         journal: Arc<BusinessJournal>,
         registry: Arc<crate::auth::SubmitterRegistry>,
         gate: std::sync::Arc<crate::readiness::ReadinessGate>,
@@ -102,8 +106,8 @@ impl CoreHandle {
         std::thread::Builder::new()
             .name("orderhub-core".to_string())
             .spawn(move || {
-                let (bridge, cache, exec_rx) = setup();
-                core_thread(&bridge, &cache, exec_rx, &rx);
+                let (bridge, cache, exec_rx, local_pump) = setup();
+                core_thread(&bridge, &cache, exec_rx, local_pump, &rx);
             })
             .expect("failed to spawn core thread");
         Self {
@@ -170,14 +174,27 @@ impl CoreHandle {
 fn core_thread(
     bridge: &OrderHubBridge,
     cache: &Rc<RefCell<Cache>>,
-    mut exec_rx: Option<crate::sandbox::ExecEventRx>,
+    mut exec_rx: Option<crate::exec_wiring::ExecEventRx>,
+    mut local_pump: Option<crate::local_client::LocalPump>,
     rx: &mpsc::Receiver<CoreRequest>,
 ) {
     loop {
-        crate::sandbox::pump_exec_events(&mut exec_rx);
+        // Keep the FIX reports flowing and flush deferred work while idle.
+        if let Some(pump) = local_pump.as_mut() {
+            pump.pump();
+        }
+        nautilus_common::runner::drain_trading_cmd_queue();
+        crate::exec_wiring::pump_exec_events(&mut exec_rx);
         match rx.recv_timeout(std::time::Duration::from_millis(5)) {
             Ok(request) => {
                 handle_core_request(bridge, cache, request);
+                // A submission or cancel may have queued commands and FIX
+                // traffic; drain once more before waiting again.
+                if let Some(pump) = local_pump.as_mut() {
+                    pump.pump();
+                }
+                nautilus_common::runner::drain_trading_cmd_queue();
+                crate::exec_wiring::pump_exec_events(&mut exec_rx);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -330,6 +347,7 @@ impl OrderHub for OrderHubService {
         };
         let time_in_force = match req.time_in_force.as_str() {
             "GTC" => TimeInForce::Gtc,
+            "DAY" => TimeInForce::Day,
             "IOC" => TimeInForce::Ioc,
             "FOK" => TimeInForce::Fok,
             other => {

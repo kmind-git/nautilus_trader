@@ -2,25 +2,6 @@
 resolver = "2"
 members = [
   "crates",
-  "crates/adapters/architect_ax",
-  "crates/adapters/betfair",
-  "crates/adapters/binance",
-  "crates/adapters/bitmex",
-  "crates/adapters/blockchain",
-  "crates/adapters/bybit",
-  "crates/adapters/coinbase",
-  "crates/adapters/databento",
-  "crates/adapters/deribit",
-  "crates/adapters/derive",
-  "crates/adapters/dydx",
-  "crates/adapters/hyperliquid",
-  "crates/adapters/interactive_brokers",
-  "crates/adapters/kraken",
-  "crates/adapters/lighter",
-  "crates/adapters/okx",
-  "crates/adapters/polymarket",
-  "crates/adapters/sandbox",
-  "crates/adapters/tardis",
   "crates/analysis",
   "crates/backtest",
   "crates/cli",
@@ -48,7 +29,6 @@ members = [
   "crates/system",
   "crates/testkit",
   "crates/trading",
-  "examples/tutorials",
 ]
 
 [workspace.package]
@@ -90,31 +70,6 @@ nautilus-serialization = { path = "crates/serialization", version = "0.65.0" }
 nautilus-system = { path = "crates/system", version = "0.65.0" }
 nautilus-testkit = { path = "crates/testkit", version = "0.65.0", default-features = false }
 nautilus-trading = { path = "crates/trading", version = "0.65.0" }
-
-# -----------------------------------------------------------------------------
-# Adapters
-#
-# Note: default-features = false keeps high-precision selection explicit
-# -----------------------------------------------------------------------------
-nautilus-architect-ax = { path = "crates/adapters/architect_ax", version = "0.65.0" }
-nautilus-betfair = { path = "crates/adapters/betfair", version = "0.65.0", default-features = false }
-nautilus-binance = { path = "crates/adapters/binance", version = "0.65.0", default-features = false }
-nautilus-bitmex = { path = "crates/adapters/bitmex", version = "0.65.0", default-features = false }
-nautilus-blockchain = { path = "crates/adapters/blockchain", version = "0.65.0" }
-nautilus-bybit = { path = "crates/adapters/bybit", version = "0.65.0", default-features = false }
-nautilus-coinbase = { path = "crates/adapters/coinbase", version = "0.65.0", default-features = false }
-nautilus-databento = { path = "crates/adapters/databento", version = "0.65.0", default-features = false }
-nautilus-deribit = { path = "crates/adapters/deribit", version = "0.65.0", default-features = false }
-nautilus-derive = { path = "crates/adapters/derive", version = "0.65.0", default-features = false }
-nautilus-dydx = { path = "crates/adapters/dydx", version = "0.65.0", default-features = false }
-nautilus-hyperliquid = { path = "crates/adapters/hyperliquid", version = "0.65.0", default-features = false }
-nautilus-interactive-brokers = { path = "crates/adapters/interactive_brokers", version = "0.65.0" }
-nautilus-kraken = { path = "crates/adapters/kraken", version = "0.65.0", default-features = false }
-nautilus-lighter = { path = "crates/adapters/lighter", version = "0.65.0", default-features = false }
-nautilus-okx = { path = "crates/adapters/okx", version = "0.65.0", default-features = false }
-nautilus-polymarket = { path = "crates/adapters/polymarket", version = "0.65.0", default-features = false }
-nautilus-sandbox = { path = "crates/adapters/sandbox", version = "0.65.0", default-features = false }
-nautilus-tardis = { path = "crates/adapters/tardis", version = "0.65.0", default-features = false }
 
 # -----------------------------------------------------------------------------
 # Core dependencies
@@ -331,37 +286,6 @@ webpki-roots = "1.0.9"
 zeroize = { version = "1.9.0", features = ["alloc", "zeroize_derive"] }
 
 # -----------------------------------------------------------------------------
-# Adapter dependencies
-# -----------------------------------------------------------------------------
-alloy = { version = "=2.4.1", default-features = false }
-bollard = { version = "0.21.1", default-features = false, features = [
-  "http",
-  "pipe",
-] }
-bzip2 = "0.6.1"
-cosmrs = { version = "0.22.0", default-features = false }
-csv = "1.4.0"
-databento = { version = "0.61.0" }
-dydx-proto = { version = "0.4.0", default-features = false }
-fallible-streaming-iterator = "0.1.9"
-flate2 = "1.1.10"
-hypersync-client = { version = "1.4.1" }
-ibapi = "=3.3.0"
-ryu = "1.0.23"
-serde_repr = "0.1.21"
-time = { version = "0.3.55", default-features = false, features = [
-  "macros",
-  "parsing",
-  "serde",
-  "std",
-] }
-tonic = { version = "0.13.1", default-features = false, features = [
-  "channel",
-  "tls-aws-lc",
-  "tls-webpki-roots",
-] }
-
-# -----------------------------------------------------------------------------
 # Dev dependencies
 # -----------------------------------------------------------------------------
 axum = { version = "0.8.9", default-features = false, features = [
@@ -393,9 +317,6 @@ capnpc = "0.27.0"
 walkdir = "2.5.0"
 
 [patch.crates-io]
-# HyperSync 1.4 requires Arrow 57, whose Parquet release depends on the external thrift crate.
-arrow = { path = "patches/arrow-compat" }
-parquet = { path = "patches/parquet-compat" }
 # Keep the pinned pyo3-stub-gen buildable with PyO3 0.29 API and exception alias changes.
 pyo3-stub-gen = { path = "patches/pyo3-stub-gen" }
 

@@ -506,7 +506,7 @@ impl OrderHubBridge {
                 })
         };
         if let Some((strategy_id, instrument_id, order_id)) = cancel_target {
-            crate::sandbox::dispatch_cancel(
+            crate::exec_wiring::dispatch_cancel(
                 self.trader_id,
                 strategy_id,
                 instrument_id,

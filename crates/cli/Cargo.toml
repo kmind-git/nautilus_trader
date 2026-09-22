@@ -17,11 +17,6 @@ workspace = true
 
 [features]
 default = []
-defi = [
-  "dep:nautilus-blockchain",
-  "nautilus-model/defi",
-  "nautilus-persistence/defi",
-]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -33,10 +28,6 @@ nautilus-core = { workspace = true }
 nautilus-infrastructure = { workspace = true, features = ["postgres"] }
 nautilus-model = { workspace = true }
 nautilus-persistence = { workspace = true, features = ["cloud"] }
-
-nautilus-blockchain = { workspace = true, features = [
-  "hypersync",
-], optional = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

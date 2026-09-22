@@ -149,7 +149,7 @@ fn harness(dir: &tempfile::TempDir) -> E2e {
 
     let journal = Arc::new(BusinessJournal::open(&dir.path().join("journal.redb")).unwrap());
     let worker = PersistenceWorker::start(Arc::clone(&journal));
-    orderhub_gateway::sandbox::attach_outcome_recorder(worker.clone());
+    orderhub_gateway::exec_wiring::attach_outcome_recorder(worker.clone());
 
     let quota = Rc::new(RefCell::new(orderhub_gateway::quota::QuotaLedger::new()));
     quota

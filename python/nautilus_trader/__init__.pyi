@@ -2,7 +2,6 @@
 # ruff: noqa: E501
 
 from . import _libnautilus
-from . import adapters
 from . import analysis
 from . import backtest
 from . import common
@@ -23,7 +22,6 @@ from . import testkit
 from . import trading
 
 __all__ = [
-    "adapters",
     "analysis",
     "backtest",
     "common",

@@ -24,11 +24,10 @@ default = []
 
 [dependencies]
 anyhow = { workspace = true }
-nautilus-common = { workspace = true }
+nautilus-common = { workspace = true, features = ["live"] }
 nautilus-core = { workspace = true }
 nautilus-execution = { workspace = true }
 nautilus-model = { workspace = true }
-nautilus-sandbox = { workspace = true }
 
 log = { workspace = true }
 redb = { workspace = true }

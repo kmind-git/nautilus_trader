@@ -12,31 +12,37 @@
 //  permissions and limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! M1 closed-loop acceptance over a real gRPC socket.
+//! M1 closed-loop acceptance over a real gRPC socket against the local FIX
+//! exchange process.
 //!
-//! One sequential scenario in a single test: kernel assembly happens on the
-//! core thread (message-bus and `Rc` kernel state must live there), the tonic
-//! server runs on an ephemeral port, and a generated client completes
-//! submit -> state -> event-stream -> idempotent-retry plus auth rejection.
+//! One sequential scenario in a single test: the exchange is spawned first
+//! (its FIX acceptor must be listening before the core thread's client
+//! connects), kernel assembly happens on the core thread, the tonic server
+//! runs on an ephemeral port, and a generated client completes
+//! submit -> cancel -> state -> event-stream -> idempotent-retry plus auth
+//! rejection.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nautilus_common::cache::Cache;
 use nautilus_common::clock::Clock;
 use nautilus_common::clock::VirtualClock;
+use nautilus_common::live::runner::replace_exec_event_sender;
+use nautilus_common::messages::ExecutionEvent;
+use nautilus_common::runner::{SyncTradingCommandSender, replace_exec_cmd_sender};
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::accounts::AccountAny;
-use nautilus_model::data::QuoteTick;
 use nautilus_model::enums::AccountType;
 use nautilus_model::events::AccountState;
 use nautilus_model::identifiers::{AccountId, InstrumentId, TraderId};
-use nautilus_model::instruments::{InstrumentAny, stubs::equity_aapl};
-use nautilus_model::types::{AccountBalance, Currency, Money, Price, Quantity};
+use nautilus_model::instruments::{Equity, InstrumentAny};
+use nautilus_model::types::{AccountBalance, Currency, Money, Price};
 use nautilus_portfolio::Portfolio;
 use nautilus_risk::engine::{RiskEngine, config::RiskEngineConfig};
+use ustr::Ustr;
 
 use orderhub_gateway::bridge::OrderHubBridge;
 use orderhub_gateway::grpc::CoreHandle;
@@ -44,33 +50,65 @@ use orderhub_gateway::journal::BusinessJournal;
 use orderhub_gateway::worker::PersistenceWorker;
 use orderhub_proto::orderhub::v1::journal_event::Kind;
 use orderhub_proto::orderhub::v1::order_hub_client::OrderHubClient;
-use orderhub_proto::orderhub::v1::{GetStateRequest, SubmitOrderRequest, WatchEventsRequest};
+use orderhub_proto::orderhub::v1::{
+    CancelOrderRequest, GetStateRequest, SubmitOrderRequest, WatchEventsRequest,
+};
 
 use tonic::Request as RpcRequest;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 
 const TOKEN: &str = "m1-test-token";
+const EXCHANGE_DIR: &str = r"D:\projects\zcodeworkspace\rust-trader";
+const EXCHANGE_EXE: &str = r"D:\projects\zcodeworkspace\rust-trader\target\release\exchange.exe";
+const EXCHANGE_ADDR: &str = "127.0.0.1:5001";
+
+fn spawn_exchange() -> std::process::Child {
+    std::process::Command::new(EXCHANGE_EXE)
+        .arg("--server")
+        .current_dir(EXCHANGE_DIR)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn exchange")
+}
+
+fn wait_for_port(port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "exchange did not start");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
 
 fn core_setup(
     journal: Arc<BusinessJournal>,
     worker: PersistenceWorker,
-) -> impl FnOnce() -> (
-    OrderHubBridge,
-    Rc<RefCell<Cache>>,
-    Option<orderhub_gateway::sandbox::ExecEventRx>,
-) + Send
-+ 'static {
+) -> impl FnOnce() -> orderhub_gateway::grpc::CoreState + Send + 'static {
     let worker_for_recorder = worker.clone();
     move || {
         let cache = Rc::new(RefCell::new(Cache::default()));
         {
             let mut cache_ref = cache.borrow_mut();
+            let aapl = Equity::builder()
+                .instrument_id(InstrumentId::from("AAPL.GOX"))
+                .raw_symbol(nautilus_model::identifiers::Symbol::from("AAPL"))
+                .isin(Ustr::from("LOCAL-AAPL"))
+                .currency(Currency::USD())
+                .price_precision(2)
+                .price_increment(Price::from("0.01"))
+                .ts_event(UnixNanos::default())
+                .ts_init(UnixNanos::default())
+                .build()
+                .expect("AAPL.GOX instrument");
             cache_ref
-                .add_instrument(InstrumentAny::Equity(equity_aapl()))
+                .add_instrument(InstrumentAny::Equity(aapl))
                 .unwrap();
             let state = AccountState::new(
-                AccountId::from("XNAS-001"),
+                AccountId::from("GOX-001"),
                 AccountType::Cash,
                 vec![AccountBalance::new(
                     Money::from("1000000 USD"),
@@ -89,17 +127,6 @@ fn core_setup(
                     nautilus_model::accounts::CashAccount::new(state, true, false),
                 ))
                 .unwrap();
-            cache_ref
-                .add_quote(QuoteTick::new(
-                    InstrumentId::from("AAPL.XNAS"),
-                    Price::from("100.00"),
-                    Price::from("100.02"),
-                    Quantity::from("100"),
-                    Quantity::from("100"),
-                    UnixNanos::from(1),
-                    UnixNanos::from(1),
-                ))
-                .unwrap();
         }
 
         let clock: Rc<RefCell<dyn Clock>> = Rc::new(RefCell::new(VirtualClock::new()));
@@ -111,15 +138,18 @@ fn core_setup(
             cache.clone(),
         )));
         RiskEngine::register_msgbus_handlers(&risk_engine);
-        let exec_rx = orderhub_gateway::sandbox::attach_sandbox_execution(
+        replace_exec_cmd_sender(Arc::new(SyncTradingCommandSender));
+        let (exec_tx, exec_rx) = tokio::sync::mpsc::unbounded_channel::<ExecutionEvent>();
+        replace_exec_event_sender(exec_tx);
+        let pump = orderhub_gateway::local_client::attach_local_execution(
+            EXCHANGE_ADDR,
             TraderId::from("ORDER-HUB"),
-            nautilus_model::identifiers::Venue::from("XNAS"),
-            AccountId::from("XNAS-001"),
-            Money::from("1000000 USD"),
+            nautilus_model::identifiers::Venue::from("GOX"),
+            &AccountId::from("GOX-001"),
             clock.clone(),
-            cache.clone(),
+            &cache,
         );
-        orderhub_gateway::sandbox::attach_outcome_recorder(worker_for_recorder);
+        orderhub_gateway::exec_wiring::attach_outcome_recorder(worker_for_recorder);
         // Keeps the engine alive for the process lifetime: bus handlers hold
         // weak references only (a real node owns its engines instead).
         #[expect(clippy::mem_forget, reason = "test keeps bus handlers alive")]
@@ -128,7 +158,7 @@ fn core_setup(
         let bridge =
             OrderHubBridge::new(TraderId::from("ORDER-HUB"), clock, cache.clone(), journal)
                 .with_worker(worker);
-        (bridge, cache, exec_rx)
+        (bridge, cache, Some(exec_rx), Some(pump))
     }
 }
 
@@ -137,11 +167,11 @@ fn submit_request(request_id: &str) -> SubmitOrderRequest {
         submitter_id: "trader-1".to_string(),
         request_id: request_id.to_string(),
         strategy_id: "ORDERHUB-S001".to_string(),
-        instrument_id: "AAPL.XNAS".to_string(),
+        instrument_id: "AAPL.GOX".to_string(),
         side: "BUY".to_string(),
         quantity: "10".to_string(),
-        price: "150.00".to_string(),
-        time_in_force: "GTC".to_string(),
+        price: "90.00".to_string(),       // resting: the book starts empty
+        time_in_force: "DAY".to_string(), // the exchange rejects GTC
         post_only: false,
         reduce_only: false,
         submit_before_ns: None,
@@ -157,6 +187,9 @@ fn authorized<T>(message: T) -> RpcRequest<T> {
 
 #[test]
 fn m1_grpc_closed_loop() {
+    let mut exchange = spawn_exchange();
+    wait_for_port(5001);
+
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async move {
         let dir = tempfile::tempdir().unwrap();
@@ -218,24 +251,57 @@ fn m1_grpc_closed_loop() {
         assert!(retried.already_admitted);
         assert_eq!(retried.client_order_id, admitted.client_order_id);
 
-        // 4. Snapshot: the sandbox matching engine fills the resting buy
-        // limit from the seed quote, so the terminal state has no active
-        // orders; instrument metadata stays enumerable via the journal.
-        let state = client
-            .get_state(authorized(GetStateRequest {}))
+        // 4. Wait for the venue accept, then cancel over gRPC
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = client
+                .get_state(authorized(GetStateRequest {}))
+                .await
+                .unwrap()
+                .into_inner();
+            if state.active_orders.len() == 1 && state.active_orders[0].status == "ACCEPTED" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "order never accepted by the exchange"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let cancel = client
+            .cancel_order(authorized(CancelOrderRequest {
+                request_id: "cancel-1".to_string(),
+                client_order_id: admitted.client_order_id.clone(),
+                ..CancelOrderRequest::default()
+            }))
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(
-            state.active_orders.len(),
-            0,
-            "order reached a terminal fill"
-        );
-        assert_eq!(state.instruments.len(), 1);
-        assert_eq!(state.instruments[0].instrument_id, "AAPL.XNAS");
-        assert_eq!(state.instruments[0].price_increment, "0.01");
+        assert_eq!(cancel.result, "CANCEL_INTENT_ACCEPTED");
+        assert!(!cancel.already_admitted);
 
-        // 5. WatchEvents from cursor 0 delivers admission + outcome events
+        // 5. Snapshot: the cancel reaches the venue; the terminal state has
+        // no active orders, and instrument metadata stays enumerable.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = client
+                .get_state(authorized(GetStateRequest {}))
+                .await
+                .unwrap()
+                .into_inner();
+            if state.active_orders.is_empty() {
+                assert_eq!(state.instruments.len(), 1);
+                assert_eq!(state.instruments[0].instrument_id, "AAPL.GOX");
+                assert_eq!(state.instruments[0].price_increment, "0.01");
+                break;
+            }
+            assert!(Instant::now() < deadline, "order never canceled");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // 6. WatchEvents from cursor 0 delivers admissions and outcomes
+        // (ADMITTED for the submit, CANCELED for the cancel).
         let stream = client
             .watch_events(authorized(WatchEventsRequest {
                 after: "0".to_string(),
@@ -246,7 +312,7 @@ fn m1_grpc_closed_loop() {
         tokio::pin!(stream);
         let mut admissions = 0;
         let mut outcomes = 0;
-        while admissions < 1 || outcomes < 2 {
+        while admissions < 2 || outcomes < 2 {
             let event = tokio::time::timeout(Duration::from_secs(5), stream.message())
                 .await
                 .expect("event stream timed out")
@@ -264,4 +330,6 @@ fn m1_grpc_closed_loop() {
 
         server.abort();
     });
+    let _ = exchange.kill();
+    let _ = exchange.wait();
 }

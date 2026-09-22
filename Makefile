@@ -162,16 +162,9 @@ FAIL_FAST_FLAG := --no-fail-fast
 endif
 
 # EXTRA_FEATURES allows adding optional features to cargo builds/tests.
-# Can be set directly: make cargo-test EXTRA_FEATURES="capnp,hypersync"
+# Can be set directly: make cargo-test EXTRA_FEATURES="capnp"
 # Or use convenience flags below for backwards compatibility.
 EXTRA_FEATURES ?=
-
-# HYPERSYNC is a convenience flag that adds hypersync to EXTRA_FEATURES.
-# Can be overridden: make check-code HYPERSYNC=true
-HYPERSYNC ?= false
-ifeq ($(HYPERSYNC),true)
-EXTRA_FEATURES += hypersync
-endif
 
 # DEFI controls whether defi feature is included (default: true).
 # Can be disabled: make cargo-test-core DEFI=false
@@ -194,21 +187,19 @@ CARGO_FEATURES := $(BASE_FEATURES),$(EXTRA_FEATURES)
 else
 CARGO_FEATURES := $(BASE_FEATURES)
 endif
-CORE_SELECTED_FEATURE_LIST := $(filter-out hypersync,$(subst $(comma),$(space),$(CARGO_FEATURES)))
+CORE_SELECTED_FEATURE_LIST := $(subst $(comma),$(space),$(CARGO_FEATURES))
 CORE_SELECTED_FEATURES := $(subst $(space),$(comma),$(strip $(CORE_SELECTED_FEATURE_LIST))),nautilus-serialization/sbe,nautilus-infrastructure/postgres
 
 # Standard-precision (64-bit) selection, shared by the test and clippy targets.
-# Two independent routes re-enable high precision, and both must be closed or the build
-# silently runs high precision under a standard-precision name:
-#   --no-default-features       most adapters declare default = [..., "high-precision"]
-#   --exclude nautilus-blockchain   it depends on nautilus-model/defi, which implies high-precision
-# `cargo tree` does not reflect either route reliably here. Verify a change by deleting an
+# --no-default-features closes the route where a crate declares
+# default = [..., "high-precision"], which would otherwise silently run high
+# precision under a standard-precision name. `cargo tree` does not reflect this
+# reliably here. Verify a change by deleting an
 # `#[allow(clippy::useless_conversion)]` in crates/model/src/types/quantity.rs and confirming
 # clippy reports it under this selection.
-STANDARD_PRECISION_ARGS := --workspace --exclude nautilus-blockchain --no-default-features --lib --tests --features "ffi,python"
+STANDARD_PRECISION_ARGS := --workspace --no-default-features --lib --tests --features "ffi,python"
 SIM_PACKAGES := -p nautilus-common -p nautilus-core -p nautilus-event-store \
 	-p nautilus-network -p nautilus-execution -p nautilus-live
-SIM_ADAPTER_PACKAGES := -p nautilus-okx
 SIM_FILTERSET := package(nautilus-common) + package(nautilus-event-store) + \
 	package(nautilus-network) + \
 	package(nautilus-execution) + \
@@ -233,7 +224,7 @@ CARGO_BUILD_JOB_TARGETS := install install-debug build build-debug build-wheel p
 	clippy-strict-audit \
 	docs docs-rust docsrs-check cargo-build cargo-check check-features hawk cargo-test \
 	cargo-test-extras cargo-test-postgres-ci cargo-test-doc cargo-test-core-local cargo-test-core-selected \
-	cargo-test-core cargo-test-adapters cargo-test-sim cargo-test-core-debug \
+	cargo-test-core cargo-test-sim cargo-test-core-debug \
 	cargo-test-core-local-debug cargo-test-lib cargo-test-standard-precision \
 	cargo-test-debug cargo-test-coverage cargo-test-crate-% \
 	cargo-test-coverage-crate-% cargo-test-coverage-html \
@@ -250,7 +241,7 @@ endif
 endif
 
 NEXTEST_ENV_TARGETS := cargo-test cargo-test-extras cargo-test-postgres-ci cargo-test-core-local \
-	cargo-test-core-selected cargo-test-core cargo-test-adapters cargo-test-sim cargo-test-core-debug \
+	cargo-test-core-selected cargo-test-core cargo-test-sim cargo-test-core-debug \
 	cargo-test-core-local-debug cargo-test-lib cargo-test-standard-precision \
 	cargo-test-debug cargo-test-coverage cargo-test-crate-% \
 	cargo-test-coverage-crate-% cargo-test-coverage-html \
@@ -265,26 +256,17 @@ ifneq ($(strip $(NEXTEST_TEST_THREADS_FOR_RUST)),)
 $(NEXTEST_ENV_TARGETS): export NEXTEST_TEST_THREADS=$(NEXTEST_TEST_THREADS_FOR_RUST)
 endif
 
-# Core crates (excludes adapters/* and workspace members without tests)
-CORE_CRATES := nautilus-analysis nautilus-backtest nautilus-common nautilus-core \
+# Core crates (excludes workspace members without tests)
+CORE_CRATES := nautilus-analysis nautilus-backtest nautilus-cli nautilus-common nautilus-core \
     nautilus-cryptography nautilus-data nautilus-event-store nautilus-execution \
     nautilus-indicators nautilus-infrastructure nautilus-live nautilus-model \
     nautilus-network nautilus-persistence nautilus-macros \
     nautilus-plugin nautilus-portfolio nautilus-risk nautilus-serialization \
     nautilus-system nautilus-testkit nautilus-trading
 
-# Crates tested in the workspace-compiled adapter lane
-ADAPTER_CRATES := nautilus-architect-ax nautilus-betfair nautilus-binance \
-    nautilus-bitmex nautilus-blockchain nautilus-bybit nautilus-cli \
-    nautilus-coinbase nautilus-databento nautilus-deribit nautilus-derive \
-    nautilus-dydx nautilus-hyperliquid nautilus-interactive-brokers \
-    nautilus-kraken nautilus-lighter nautilus-okx nautilus-polymarket \
-    nautilus-sandbox nautilus-tardis
-
 # Workspace members without Rust test functions:
-# nautilus-trader is the container library, nautilus-pyo3 owns generated bindings,
-# and nautilus-tutorials has a binary target with test = false.
-NO_TEST_CRATES := nautilus-trader nautilus-pyo3 nautilus-tutorials
+# nautilus-trader is the container library and nautilus-pyo3 owns generated bindings.
+NO_TEST_CRATES := nautilus-trader nautilus-pyo3
 
 # > Colors
 # Use ANSI escape codes directly for cross-platform compatibility (Git Bash on Windows doesn't have tput)
@@ -390,9 +372,6 @@ ib-stop:  #-- Stop local TWS/IBC processes and Docker IB Gateway containers
 .PHONY: clean-builds
 clean-builds:  #-- Clean distribution and target directories
 	$Q rm -rf dist target \
-		crates/adapters/derive/fuzz/target \
-		crates/adapters/lighter/fuzz/target \
-		crates/adapters/lighter/fuzz/pornin/target \
 		2>/dev/null || true
 
 .PHONY: clean-build-artifacts
@@ -438,10 +417,8 @@ pre-commit:  #-- Run all pre-commit hooks on all files
 		prek run --all-files \
 	$(call timer_end,Pre-commit)
 
-# The check-code target uses CARGO_FEATURES which is controlled by the HYPERSYNC flag.
-# By default, hypersync is excluded to speed up checks. Override with: make check-code HYPERSYNC=true
 .PHONY: check-code
-check-code:  #-- Run clippy on lib/test targets and ruff --fix (use HYPERSYNC=true to include hypersync feature)
+check-code:  #-- Run clippy on lib/test targets and ruff --fix
 	$(info $(M) Running code quality checks...)
 	@cargo clippy --locked --workspace --lib --tests --features "$(CARGO_FEATURES)" --profile nextest -- -D warnings
 	@VIRTUAL_ENV= uv run --project python --no-sync ruff check . --config python/pyproject.toml --fix --force-exclude
@@ -458,7 +435,6 @@ check-code-sim: export RUSTFLAGS := $(SIM_RUSTFLAGS) $(RUSTFLAGS)
 check-code-sim:  #-- Run clippy on DST simulation lib/test targets
 	$(info $(M) Running DST simulation code quality checks...)
 	@cargo clippy --locked $(SIM_PACKAGES) --lib --tests --features simulation --profile nextest -- -D warnings
-	@cargo clippy --locked $(SIM_ADAPTER_PACKAGES) --lib --tests --no-default-features --features simulation --profile nextest -- -D warnings
 	@printf "$(GREEN)DST simulation checks passed$(RESET)\n"
 
 .PHONY: check-all-targets
@@ -501,7 +477,7 @@ pre-flight-steps:
 		$(MAKE) --no-print-directory sync \
 		&& $(MAKE) --no-print-directory format \
 		&& $(MAKE) --no-print-directory test-scripts-quiet \
-		&& $(MAKE) --no-print-directory check-code EXTRA_FEATURES="capnp,hypersync" \
+		&& $(MAKE) --no-print-directory check-code EXTRA_FEATURES="capnp" \
 		&& $(MAKE) --no-print-directory check-code-sim \
 		&& $(MAKE) --no-print-directory cargo-test-sim \
 		&& $(MAKE) --no-print-directory cargo-test-extras \
@@ -641,7 +617,7 @@ docsrs-check: check-hack-installed #-- Check documentation builds for docs.rs co
 	cargo +$(DOCSRS_TOOLCHAIN) hack --workspace --ignore-private --ignore-unknown-features \
 		--features arrow,arrow-display,capnp,cloud,defi \
 		--features example-databento,examples,ffi,high-precision,host \
-		--features hypersync,indicators,live,node,persistence,plugin \
+		--features indicators,live,node,persistence,plugin \
 		--features postgres,redis,replay,sbe,simulation,streaming,test-support \
 		--features tracing-bridge,transport-sockudo,turmoil \
 		doc --locked --no-deps
@@ -930,8 +906,8 @@ else
 endif
 
 .PHONY: cargo-test-extras
-cargo-test-extras:  #-- Run all Rust tests with capnp and hypersync features (convenience shortcut)
-	$(MAKE) cargo-test EXTRA_FEATURES="capnp,hypersync"
+cargo-test-extras:  #-- Run all Rust tests with the capnp feature (convenience shortcut)
+	$(MAKE) cargo-test EXTRA_FEATURES="capnp"
 
 .PHONY: cargo-test-postgres-ci
 cargo-test-postgres-ci: export RUST_BACKTRACE=1
@@ -941,7 +917,7 @@ cargo-test-postgres-ci:  #-- Run focused PostgreSQL tests with the CI bootstrap 
 	NEXTEST_PROFILE="$(NEXTEST_PROFILE)" \
 	NEXTEST_VERBOSE="$(NEXTEST_VERBOSE)" \
 	CARGO_CI_PROFILE="$(CARGO_CI_PROFILE)" \
-	POSTGRES_TEST_FEATURES="$(BASE_FEATURES),capnp,hypersync" \
+	POSTGRES_TEST_FEATURES="$(BASE_FEATURES),capnp" \
 	bash scripts/ci/test-postgres-bootstrap.bash
 
 POSTGRES_BOOTSTRAP_INPUTS := schema/sql \
@@ -977,11 +953,10 @@ cargo-test-doc:  #-- Run Rust doctests (examples in `///` and `//!` comments)
 		exit $$status; \
 	fi
 
-# Both core and adapter targets use identical --workspace --features flags so
+# Workspace test targets use identical --workspace --features flags so
 # cargo sees the same feature union and does not recompile between runs.
 # The -E filterset selects which tests to execute.
 CORE_FILTERSET := $(subst $(eval ) , + ,$(foreach crate,$(CORE_CRATES),package($(crate))))
-ADAPTER_FILTERSET := $(subst $(eval ) , + ,$(foreach crate,$(ADAPTER_CRATES),package($(crate))))
 
 .PHONY: cargo-test-core-local
 cargo-test-core-local: export RUST_BACKTRACE=1
@@ -1012,24 +987,11 @@ else
 	cargo nextest run --locked --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile $(CARGO_CI_PROFILE) $(NEXTEST_OUTPUT_ARGS)
 endif
 
-.PHONY: cargo-test-adapters
-cargo-test-adapters: export RUST_BACKTRACE=1
-cargo-test-adapters: check-nextest-installed
-cargo-test-adapters:  #-- Run Rust tests for the workspace-compiled adapter lane
-ifeq ($(NEXTEST_VERBOSE),true)
-	$(info $(M) Running Rust tests for the workspace-compiled adapter lane...)
-	cargo nextest run --locked --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(ADAPTER_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile $(CARGO_CI_PROFILE) $(NEXTEST_OUTPUT_ARGS)
-else
-	$(info $(M) Running Rust tests for the workspace-compiled adapter lane (showing summary and failures only)...)
-	cargo nextest run --locked --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(ADAPTER_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile $(CARGO_CI_PROFILE) $(NEXTEST_OUTPUT_ARGS)
-endif
-
 # DST simulation smoke test. Nextest compiles every selected lib/test target
 # before applying its filter, so the standard-precision run is also the compile
 # gate without a separate build. Feature-coherent runs execute every test that
 # is sim-compatible today: all of nautilus-common, nautilus-event-store,
-# nautilus-network, and nautilus-execution, plus nautilus-okx integration dst
-# tests without the crate's default high-precision feature. Transport-bound and
+# nautilus-network, and nautilus-execution. Transport-bound and
 # thread-blocking tests are gated out at the source. The lane also runs the
 # LiveNode startup reconciliation timeout regression and the cross-crate seam
 # pinning tests in nautilus-core.
@@ -1044,8 +1006,6 @@ cargo-test-sim: check-nextest-installed
 cargo-test-sim:  #-- Run DST simulation smoke tests (cfg madsim + simulation feature)
 	$(info $(M) Running in-scope DST tests under simulation...)
 	cargo nextest run --locked $(SIM_PACKAGES) --lib --tests --features simulation -E '$(SIM_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile $(CARGO_CI_PROFILE) $(NEXTEST_OUTPUT_ARGS)
-	$(info $(M) Running OKX DST integration tests under simulation...)
-	cargo nextest run --locked $(SIM_ADAPTER_PACKAGES) --test integration --no-default-features --features simulation -E 'test(dst::)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile $(CARGO_CI_PROFILE) $(NEXTEST_OUTPUT_ARGS)
 	$(info $(M) Running precision-sensitive DST tests under simulation + high-precision...)
 	cargo nextest run --locked $(SIM_HIGH_PRECISION_PACKAGES) --lib --tests --features "simulation,high-precision" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile $(CARGO_CI_PROFILE) $(NEXTEST_OUTPUT_ARGS)
 

@@ -24,7 +24,7 @@ name = "orderhub-client"
 path = "src/bin/client.rs"
 
 [dependencies]
-nautilus-common = { workspace = true }
+nautilus-common = { workspace = true, features = ["live"] }
 nautilus-core = { workspace = true }
 nautilus-model = { workspace = true }
 nautilus-portfolio = { workspace = true }

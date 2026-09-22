@@ -10,7 +10,6 @@ trap 'rm -rf "$test_root"' EXIT
 git -C "$REPO_ROOT" ls-files '*Cargo.lock' > "${test_root}/actual-locks"
 printf '%s\n' \
   'Cargo.lock' \
-  'crates/adapters/lighter/fuzz/pornin/Cargo.lock' \
   > "${test_root}/expected-locks"
 
 if ! cmp -s "${test_root}/expected-locks" "${test_root}/actual-locks"; then
